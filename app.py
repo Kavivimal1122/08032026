@@ -1,83 +1,102 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import os
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
+import time
 
-# --- Page Layout ---
-st.set_page_config(page_title="Big/Small AI Engine", layout="centered")
-st.title("🎰 Automated Prediction Pipeline")
+st.set_page_config(page_title="Big/Small Prediction Engine", layout="wide")
+st.title("🚀 AI Prediction Pipeline")
 
-# File Configuration
-files = ["01-15 2.0.csv", "1-15.csv"]
-
-def run_prediction_flow():
-    # 1. & 2. CSV Data & Clean Data
-    with st.status("🚀 Running Prediction Pipeline...", expanded=True) as status:
-        st.write("Reading CSV files from GitHub...")
-        dfs = []
-        for f in files:
-            if not os.path.exists(f):
-                st.error(f"File {f} not found in repository!")
-                return
-            df = pd.read_csv(f)
+def run_pipeline():
+    # --- 1. CSV Data ---
+    st.subheader("📥 1. CSV Data & Cleaning")
+    try:
+        file1 = "01-15 2.0.csv"
+        file2 = "1-15.csv"
+        
+        df1 = pd.read_csv(file1)
+        df2 = pd.read_csv(file2)
+        
+        # Standardizing columns
+        def clean_df(df):
             df.columns = [c.strip() for c in df.columns]
-            # Standardize Outcome Column
-            col = [c for c in df.columns if 'B/S' in c or 'S/B' in c][0]
-            df = df.rename(columns={col: 'Target', 'Ser No': 'Serial'})
-            df['Target_Num'] = df['Target'].map({'B': 1, 'S': 0})
-            dfs.append(df[['Serial', 'Target_Num']])
-        
-        full_data = pd.concat(dfs).sort_values('Serial').drop_duplicates().reset_index(drop=True)
-        st.write(f"✅ Cleaned {len(full_data)} records.")
+            target = [c for c in df.columns if 'B/S' in c or 'S/B' in c][0]
+            df = df.rename(columns={target: 'Outcome', 'Ser No': 'Serial'})
+            df['Outcome_Num'] = df['Outcome'].map({'B': 1, 'S': 0})
+            return df[['Serial', 'Outcome_Num']]
 
-        # 3. Feature Engineering
-        st.write("🛠️ Engineering Features...")
-        for i in range(1, 6):
-            full_data[f'lag_{i}'] = full_data['Target_Num'].shift(i)
-        full_data['mva'] = full_data['Target_Num'].rolling(window=3).mean().shift(1)
-        full_data = full_data.dropna()
+        data = pd.concat([clean_df(df1), clean_df(df2)]).sort_values('Serial').drop_duplicates().dropna()
+        st.write(f"✅ Data Loaded: {len(data)} records found.")
         
-        features = [f'lag_{i}' for i in range(1, 6)] + ['mva']
-        X = full_data[features]
-        y = full_data['Target_Num']
+        # --- 2. Feature Engineering ---
+        st.subheader("⚙️ 2. Feature Engineering")
+        lags = 5
+        for i in range(1, lags + 1):
+            data[f'lag_{i}'] = data['Outcome_Num'].shift(i)
+        data['rolling_avg'] = data['Outcome_Num'].rolling(window=3).mean().shift(1)
+        data = data.dropna()
+        
+        features = [f'lag_{i}' for i in range(1, lags + 1)] + ['rolling_avg']
+        X = data[features]
+        y = data['Outcome_Num']
+        st.write("✅ Features generated (Lags 1-5 + Rolling Average).")
 
-        # 4, 5, 6, 7. Train, Evaluate, Self Test, Backtest
-        st.write("🧠 Training Ensemble Models...")
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.15, shuffle=False)
+        # --- 3. Train Models & 4. Evaluate (Self Test) ---
+        st.subheader("🧠 3. Model Training & 4. Self Test")
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
         
         rf = RandomForestClassifier(n_estimators=100, random_state=42).fit(X_train, y_train)
         gb = GradientBoostingClassifier(random_state=42).fit(X_train, y_train)
+        lr = LogisticRegression().fit(X_train, y_train)
         
-        test_acc = accuracy_score(y_test, rf.predict(X_test))
-        st.write(f"📈 Backtest Accuracy: {test_acc*100:.2f}%")
+        rf_acc = accuracy_score(y_test, rf.predict(X_test))
+        gb_acc = accuracy_score(y_test, gb.predict(X_test))
+        st.write(f"✅ RF Accuracy: {rf_acc*100:.2f}% | GB Accuracy: {gb_acc*100:.2f}%")
 
-        # 8, 9, 10. Ensemble, Engine, Confidence
-        st.write("🔮 Generating Prediction...")
-        last = full_data.iloc[-1]
-        input_data = pd.DataFrame([{
-            'lag_1': last['Target_Num'], 'lag_2': last['lag_1'], 'lag_3': last['lag_2'],
-            'lag_4': last['lag_3'], 'lag_5': last['lag_4'],
-            'mva': (last['Target_Num'] + last['lag_1'] + last['lag_2']) / 3
+        # --- 5. Backtest ---
+        st.subheader("📊 5. Backtest Results")
+        test_preds = (rf.predict_proba(X_test)[:, 1] + gb.predict_proba(X_test)[:, 1]) / 2
+        backtest_acc = accuracy_score(y_test, (test_preds > 0.5).astype(int))
+        st.info(f"Historical Backtest Win Rate: {backtest_acc*100:.2f}%")
+
+        # --- 6. Ensemble Model & Prediction Engine ---
+        st.subheader("🔮 6. Prediction Engine")
+        last_row = data.iloc[-1]
+        next_features = pd.DataFrame([{
+            'lag_1': last_row['Outcome_Num'],
+            'lag_2': last_row['lag_1'],
+            'lag_3': last_row['lag_2'],
+            'lag_4': last_row['lag_3'],
+            'lag_5': last_row['lag_4'],
+            'rolling_avg': (last_row['Outcome_Num'] + last_row['lag_1'] + last_row['lag_2']) / 3
         }])[features]
 
-        prob = (rf.predict_proba(input_data)[0][1] + gb.predict_proba(input_data)[0][1]) / 2
-        prediction = "BIG (B)" if prob > 0.5 else "SMALL (S)"
-        conf = prob if prob > 0.5 else (1 - prob)
+        # Ensemble Logic
+        prob_rf = rf.predict_proba(next_features)[0][1]
+        prob_gb = gb.predict_proba(next_features)[0][1]
+        prob_lr = lr.predict_proba(next_features)[0][1]
         
-        status.update(label="✅ Prediction Complete!", state="complete", expanded=False)
+        final_prob = (prob_rf + prob_gb + prob_lr) / 3
+        
+        # --- 7. Confidence Score ---
+        prediction = "BIG (B)" if final_prob > 0.5 else "SMALL (S)"
+        confidence = final_prob if final_prob > 0.5 else (1 - final_prob)
 
-    # Big Result Display
-    st.divider()
-    c1, c2 = st.columns(2)
-    c1.metric("TARGET PREDICTION", prediction)
-    c2.metric("CONFIDENCE SCORE", f"{conf*100:.2f}%")
-    st.divider()
-    
-    st.success(f"Pipeline finished successfully. Based on historical patterns, the next target is likely {prediction}.")
+        st.divider()
+        c1, c2 = st.columns(2)
+        with c1:
+            st.metric("NEXT PREDICTION", prediction)
+        with c2:
+            st.metric("CONFIDENCE SCORE", f"{confidence*100:.2f}%")
+            
+    except Exception as e:
+        st.error(f"⚠️ Error: Ensure '01-15 2.0.csv' and '1-15.csv' are in your GitHub folder. Error: {e}")
 
-# Auto-run the function
-run_prediction_flow()
+if st.button("RUN AUTO-PREDICTION ENGINE"):
+    with st.spinner("Processing Pipeline..."):
+        run_pipeline()
+else:
+    st.info("Click the button above to start the analysis.")
