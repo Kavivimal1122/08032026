@@ -8,19 +8,19 @@ from sklearn.metrics import accuracy_score
 
 # --- Page Config ---
 st.set_page_config(page_title="AI Prediction Pro", layout="wide")
-st.title("🎯 AI Prediction Engine + Win/Loss Tracker")
+st.title("🎯 AI Prediction Engine + Streak Tracker")
 
-# Initialize Session State for History and Streaks
+# Initialize Session State
 if 'history' not in st.session_state:
     st.session_state.history = []
 if 'last_pred' not in st.session_state:
     st.session_state.last_pred = None
-if 'streak' not in st.session_state:
-    st.session_state.streak = 0
-if 'streak_type' not in st.session_state:
-    st.session_state.streak_type = "" # "Win" or "Loss"
+if 'current_streak_num' not in st.session_state:
+    st.session_state.current_streak_num = 0
+if 'current_streak_type' not in st.session_state:
+    st.session_state.current_streak_type = ""
 
-# --- STEP 1 & 2: DATA LOADING ---
+# --- DATA LOADING & CLEANING ---
 @st.cache_data
 def get_clean_data():
     files = [f for f in os.listdir('.') if f.endswith('.csv')]
@@ -39,14 +39,13 @@ def get_clean_data():
 data = get_clean_data()
 
 if data is not None:
-    # --- STEP 3: FEATURE ENGINEERING ---
+    # --- FEATURE ENGINEERING & TRAINING ---
     for i in range(1, 6):
         data[f'lag_{i}'] = data['Outcome_Num'].shift(i)
     data['rolling_avg_3'] = data['Outcome_Num'].rolling(window=3).mean().shift(1)
     train_df = data.dropna()
     features = [f'lag_{i}' for i in range(1, 6)] + ['rolling_avg_3']
     
-    # --- STEP 4-7: MODEL TRAINING ---
     X = train_df[features]
     y = train_df['Outcome_Num']
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
@@ -54,81 +53,72 @@ if data is not None:
     gb = GradientBoostingClassifier(random_state=42).fit(X_train, y_train)
     model_acc = accuracy_score(y_test, rf.predict(X_test))
 
-    # --- UI: INPUT SECTION ---
-    st.subheader("🔢 Step 8: Enter Latest Number")
+    # --- INPUT SECTION ---
+    st.subheader("🔢 Enter Latest Number")
     user_num = st.number_input("What number just appeared?", 0, 9, 5)
     
     if st.button("SUBMIT & PREDICT NEXT"):
         current_bs = "BIG" if user_num >= 5 else "SMALL"
-        current_num = 1 if user_num >= 5 else 0
+        current_num_val = 1 if user_num >= 5 else 0
         
-        # --- WIN / LOSS LOGIC ---
-        result_text = "N/A"
+        # --- STREAK CALCULATION ---
+        display_result = "START"
         if st.session_state.last_pred is not None:
-            if st.session_state.last_pred == current_bs:
-                result_text = "✅ WIN"
-                if st.session_state.streak_type == "Win":
-                    st.session_state.streak += 1
-                else:
-                    st.session_state.streak = 1
-                    st.session_state.streak_type = "Win"
+            is_win = (st.session_state.last_pred == current_bs)
+            outcome_type = "WIN" if is_win else "LOSS"
+            
+            if outcome_type == st.session_state.current_streak_type:
+                st.session_state.current_streak_num += 1
             else:
-                result_text = "❌ LOSS"
-                if st.session_state.streak_type == "Loss":
-                    st.session_state.streak += 1
-                else:
-                    st.session_state.streak = 1
-                    st.session_state.streak_type = "Loss"
+                st.session_state.current_streak_num = 1
+                st.session_state.current_streak_type = outcome_type
+            
+            display_result = f"{st.session_state.current_streak_type} {st.session_state.current_streak_num}"
 
-        # --- STEP 9: PREDICTION ENGINE ---
+        # --- PREDICTION ENGINE ---
         last_val = data.iloc[-1]
         next_x = pd.DataFrame([{
-            'lag_1': current_num, 'lag_2': last_val['Outcome_Num'], 'lag_3': last_val['lag_1'],
+            'lag_1': current_num_val, 'lag_2': last_val['Outcome_Num'], 'lag_3': last_val['lag_1'],
             'lag_4': last_val['lag_2'], 'lag_5': last_val['lag_3'],
-            'rolling_avg_3': (current_num + last_val['Outcome_Num'] + last_val['lag_1']) / 3
+            'rolling_avg_3': (current_num_val + last_val['Outcome_Num'] + last_val['lag_1']) / 3
         }])[features]
 
         prob = (rf.predict_proba(next_x)[0][1] + gb.predict_proba(next_x)[0][1]) / 2
         new_prediction = "BIG" if prob > 0.5 else "SMALL"
         confidence = prob if prob > 0.5 else (1 - prob)
 
-        # Update History
+        # Update History Table
         st.session_state.history.insert(0, {
-            "Input Num": user_num,
+            "Input": user_num,
             "Type": current_bs,
-            "Result": result_text,
-            "Next Prediction": new_prediction,
-            "Confidence": f"{confidence*100:.2f}%"
+            "Result": display_result,
+            "Next Pred": new_prediction,
+            "Conf": f"{confidence*100:.2f}%"
         })
         
-        # Store prediction for next turn
         st.session_state.last_pred = new_prediction
 
-    # --- STEP 10: DISPLAY RESULTS ---
+    # --- DISPLAY ---
     st.divider()
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.metric("CURRENT STREAK", f"{st.session_state.streak} {st.session_state.streak_type}")
-    with col2:
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("STREAK", f"{st.session_state.current_streak_type} {st.session_state.current_streak_num}")
+    with c2:
         if st.session_state.last_pred:
             st.header(f"NEXT: {st.session_state.last_pred}")
         else:
-            st.header("Enter Number to Start")
-    with col3:
-        st.metric("BACKTEST ACCURACY", f"{model_acc*100:.2f}%")
+            st.header("Ready...")
+    with c3:
+        st.metric("ACCURACY", f"{model_acc*100:.2f}%")
 
-    # --- HISTORY TABLE ---
+    # --- WIN/LOSS LOG ---
     st.subheader("📜 Pasted History (Win/Loss Log)")
     if st.session_state.history:
-        history_df = pd.DataFrame(st.session_state.history)
-        st.table(history_df)
+        st.table(pd.DataFrame(st.session_state.history))
         
-        if st.button("Clear History"):
-            st.session_state.history = []
-            st.session_state.streak = 0
-            st.session_state.last_pred = None
+        if st.button("Reset Everything"):
+            for key in st.session_state.keys():
+                del st.session_state[key]
             st.rerun()
-
 else:
-    st.error("Missing CSV files. Please upload them to GitHub.")
+    st.error("No CSV files found.")
